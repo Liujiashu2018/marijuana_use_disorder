@@ -1,0 +1,231 @@
+---
+title: "model"
+author: "Jiashu Liu, Jingdan Zou & Qihan Chen"
+date: "2023-05-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libs, include=FALSE}
+library(tidyverse)
+library(dplyr)
+library(ROCR)
+library(ranger)
+#library(pak)
+#pak::pak("caret")
+library(caret)
+library(e1071)
+library(nnet)
+set.seed(123)
+```
+
+```{r}
+# load data
+NSDUH_2021 <- read.csv("NSDUH_2021.csv")
+
+# drop all NAs in important predictor variables
+NSDUH_2021 <- NSDUH_2021[complete.cases(NSDUH_2021$age, NSDUH_2021$sex,
+                                        NSDUH_2021$health, NSDUH_2021$marital, 
+                                        NSDUH_2021$degree, NSDUH_2021$employ, 
+                                        NSDUH_2021$covid_mh, NSDUH_2021$fin,
+                                        NSDUH_2021$income), ]
+
+# make variables as factors
+NSDUH_2021 <- NSDUH_2021 %>% 
+  mutate(age = as.factor(age), sex = as.factor(sex),
+         health = as.factor(health), marital = as.factor(marital),
+         degree = as.factor(degree), employ = as.factor(employ), 
+         covid_fin = as.factor(covid_fin), covid_mh = as.factor(covid_mh),
+         income = as.factor(income), SUD_MJ = as.factor(SUD_MJ))
+
+```
+
+
+```{r}
+# find split_size to divide data in 67% train/ 33% test sets
+split_size <- sample(1:nrow(NSDUH_2021), floor(0.67 * nrow(NSDUH_2021)))
+
+# Extract the train and test sets
+train <- NSDUH_2021[split_size, ]
+test <- NSDUH_2021[-split_size, ]
+```
+
+
+```{r}
+# fit a logistic regression model on train
+logi_model <- glm(SUD_MJ ~ age + sex + health + marital + degree + employ +
+                    covid_mh + covid_fin + income, 
+                  data = train, family = binomial(link = "logit"))
+summary(logi_model)
+
+# compute the AUC of logi model on test
+test.glm <- test %>% 
+  mutate(logi.prob = predict(logi_model, newdata = test, type = 'response'))
+test.logi.pred <- prediction(test.glm$logi.prob, test.glm$SUD_MJ)
+test.logi.perf <- performance(test.logi.pred, "auc")
+cat('The AUC score of the logistic regression model on test is ', 
+    test.logi.perf@y.values[[1]], "\n")
+
+# Accuracy
+# Obtain predicted classes based on the probability threshold of 0.5
+test.glm$logi.pred <- ifelse(test.glm$logi.prob > 0.5, 1, 0)
+
+# Create confusion matrix
+confusion.matrix <- confusionMatrix(as.factor(test.glm$logi.pred), as.factor(test.glm$SUD_MJ))
+
+# Extract accuracy from the confusion matrix
+accuracy <- confusion.matrix$overall['Accuracy']
+cat("The accuracy of the logistic regression model on test is", accuracy, "\n")
+
+```
+
+
+```{r}
+# fit a random forest model on train
+rf_model <- ranger(SUD_MJ ~ age + sex + health + marital + degree + employ +
+                    covid_mh + covid_fin + income,
+                   data = train, num.trees = 1000, 
+                   respect.unordered.factors = TRUE, probability = TRUE)
+summary(rf_model)
+
+# compute the AUC of rf model on test
+test.rf <- test %>%
+  mutate(rf.prob = predict(rf_model, data = test)$predictions[,2])
+test.rf.pred <- prediction(test.rf$rf.prob, test.rf$SUD_MJ)
+test.rf.perf <- performance(test.rf.pred, "auc")
+cat('The AUC score of the random forest model on test is', 
+    test.rf.perf@y.values[[1]], "\n")
+
+# Accuracy
+# Obtain predicted classes based on the probability threshold of 0.5
+test.rf$rf.pred <- ifelse(test.rf$rf.prob > 0.5, 1, 0)
+
+# Create confusion matrix
+confusion.matrix2 <- confusionMatrix(as.factor(test.rf$rf.pred), as.factor(test.rf$SUD_MJ))
+
+# Extract accuracy from the confusion matrix
+accuracy2 <- confusion.matrix2$overall['Accuracy']
+cat("The accuracy of the random forest model on test is", accuracy2, "\n")
+
+```
+
+```{r}
+# Neural Net
+trControl <- trainControl(method = "cv", number = 10, search = "grid")
+nn.fit <- caret::train(SUD_MJ ~ age + sex + health + marital + degree + employ +
+                    covid_mh + covid_fin + income,
+                       data = train,
+                       method = "nnet",
+                       trControl = trControl)
+nn.fit
+
+# make predictions on test data
+test.nn <- test %>% 
+  mutate(nn.prob = predict(nn.fit, newdata = test, type = "prob")[,2])
+
+# compute the AUC of nnet model on test
+test.nn.pred <- prediction(test.nn$nn.prob, test.nn$SUD_MJ)
+test.nn.perf <- performance(test.nn.pred, "auc")
+cat("The AUC score of the neural network model on test is", 
+    test.nn.perf@y.values[[1]], "\n")
+
+test.nn$nn.pred <- ifelse(test.nn$nn.prob > 0.5, 1, 0)
+
+# Create confusion matrix
+confusion.matrix3 <- confusionMatrix(as.factor(test.nn$nn.pred), as.factor(test.nn$SUD_MJ))
+
+# Extract accuracy from the confusion matrix
+accuracy3 <- confusion.matrix3$overall['Accuracy']
+cat("The accuracy of the neural network on test is", accuracy3, "\n")
+```
+
+
+```{r}
+# Create one plot with three precision-at-k curves (one for each model)
+# first, create a data frame with x-value and y-value for each model
+logi.plot.data <- test.glm %>% 
+  arrange(desc(logi.prob)) %>% 
+  mutate(nums = row_number(), 
+         precision = cumsum(as.numeric(SUD_MJ) - 1) / nums,
+         group = "logistic model") %>% 
+  select(nums, precision, group)
+
+rf.plot.data <- test.rf %>% 
+  arrange(desc(rf.prob)) %>% 
+  mutate(nums = row_number(),
+         precision = cumsum(as.numeric(SUD_MJ) - 1) / nums,
+         group = "random forest") %>% 
+  select(nums, precision, group)
+
+nn.plot.data <- test.nn %>% 
+  arrange(desc(nn.prob)) %>% 
+  mutate(nums = row_number(),
+         precision = cumsum(as.numeric(SUD_MJ) - 1) / nums,
+         group = "neural network") %>% 
+  select(nums, precision, group)
+
+# then, combine 3 data frames by row
+plot.data <- rbind(logi.plot.data, rf.plot.data, nn.plot.data)
+
+# draw and save the plot
+theme_set(theme_bw())
+p <- ggplot(data = plot.data, aes(x = nums, y = precision, color = group)) + 
+  geom_line() +
+  ggtitle("Precision-at-k plot") +
+  scale_x_log10('\nNumber of Marijuana Users', limits=c(10, 20000), 
+                breaks=c(10, 50, 100, 500, 1000, 5000, 20000),
+                labels=c('10', '50', '100', '500', '1000', '5000', '20000')) +
+  scale_y_continuous("Model Precision", limits=c(0, 1), labels=scales::percent)
+p
+
+# ggsave(plot=p, file="./model_precision_plot.png", height = 5, width = 10)
+
+```
+
+```{r}
+# library(magrittr)
+
+logi.plot.data.cali <- test.glm %>% 
+  mutate(calibration = round(100*logi.prob)) %>%
+  group_by(calibration) %>% 
+  dplyr::summarise(model.estimate = mean(logi.prob),
+                                      nums = n(),
+                                      empirical.estimate = mean(as.numeric(SUD_MJ))-1)
+                                  
+rf.plot.data.cali <- test.rf %>% mutate(calibration = round(100*rf.prob)) %>%
+  group_by(calibration) %>% summarize(model.estimate = mean(rf.prob),
+                                      nums = n(),
+                                      empirical.estimate = mean(as.numeric(SUD_MJ))-1)
+
+nn.plot.data.cali <- test.nn %>% mutate(calibration = round(100*nn.prob)) %>%
+  group_by(calibration) %>% summarize(model.estimate = mean(nn.prob),
+                                      nums = n(),
+                                      empirical.estimate = mean(as.numeric(SUD_MJ))-1)
+
+logi.plot.data.cali$group <- "logistic regression"
+rf.plot.data.cali$group <- "random forest"
+nn.plot.data.cali$group <- "neural network"
+plot.data.cali <- rbind(logi.plot.data.cali, rf.plot.data.cali, nn.plot.data.cali)
+
+# create and save plot
+p2 <- ggplot(data = plot.data.cali, aes(y=empirical.estimate, x=model.estimate,
+                                        color = group))
+p2 <- p2 + geom_point(alpha=0.5, aes(size=nums)) + ggtitle("Calibration Plot")
+p2 <- p2 + scale_size_area(guide='none', max_size=15)
+p2 <- p2 + geom_abline(intercept=0, slope=1, linetype="dashed")
+p2 <- p2 +scale_y_log10('Empirical probability \n', limits=c(.001,1),
+                        breaks=c(.001,.003,.01,.03,.1,.3,1),
+                        labels=c('0.1%','0.3%','1%','3%','10%','30%','100%'))
+p2 <- p2 + scale_x_log10('\nModel estimated probability', limits=c(.001,1),
+                         breaks=c(.001,.003,.01,.03,.1,.3,1),
+                         labels=c('0.1%','0.3%','1%','3%','10%','30%','100%'))
+p2
+
+# ggsave(plot=p2, file="./calibration_plot.png", height = 5, width = 10)
+
+```
+
+

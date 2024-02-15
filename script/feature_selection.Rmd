@@ -1,0 +1,109 @@
+---
+title: "Feature_Selection"
+author: "Jiashu Liu, Jingdan Zou & Qihan Chen"
+output: html_document
+date: "2023-05-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load in libraries & data
+library(tidyverse)
+library(dplyr)
+library(glmnet)
+library(ggplot2)
+library(caret)
+library(ROCR)
+NSDUH_2021 <- read.csv("/Users/jiashuliu/Desktop/ML&2004/Messy Data/Final_Project/Messy_Data_Final/NSDUH_2021.csv")
+```
+
+```{r}
+NSDUH_2021$SUD_MJ <- as.factor(NSDUH_2021$SUD_MJ)
+NSDUH_2021$age <- as.factor(NSDUH_2021$age)
+NSDUH_2021$sex <- as.factor(NSDUH_2021$sex)
+NSDUH_2021$race <- as.factor(NSDUH_2021$race)
+NSDUH_2021$health <- as.factor(NSDUH_2021$health)
+NSDUH_2021$marital <- as.factor(NSDUH_2021$marital)
+NSDUH_2021$degree <- as.factor(NSDUH_2021$degree)
+NSDUH_2021$employ <- as.factor(NSDUH_2021$employ)
+NSDUH_2021$family <- as.factor(NSDUH_2021$family)
+NSDUH_2021$kid <- as.factor(NSDUH_2021$kid)
+NSDUH_2021$elderly <- as.factor(NSDUH_2021$elderly)
+NSDUH_2021$covid_mh <- as.factor(NSDUH_2021$covid_mh)
+NSDUH_2021$covid_fin <- as.factor(NSDUH_2021$covid_fin)
+NSDUH_2021$health_insur <- as.factor(NSDUH_2021$health_insur)
+NSDUH_2021$income <- as.factor(NSDUH_2021$income)
+NSDUH_2021$assist <- as.factor(NSDUH_2021$assist)
+NSDUH_2021$county <- as.factor(NSDUH_2021$county)
+NSDUH_2021$aia <- as.factor(NSDUH_2021$aia)
+NSDUH_2021$pregnant <- as.factor(NSDUH_2021$pregnant)
+NSDUH_2021$schfeel <- as.factor(NSDUH_2021$schfeel)
+NSDUH_2021$parhw <- as.factor(NSDUH_2021$parhw)
+```
+
+```{r}
+set.seed(1234)
+train <- sample(nrow(NSDUH_2021), nrow(NSDUH_2021)*0.7)
+train_data <- NSDUH_2021[train, ]
+test_data <- NSDUH_2021[-train, ]
+train_data <- na.omit(train_data)
+test_data <- na.omit(test_data)
+```
+```{r}
+trainfactors <- model.matrix(train_data$SUD_MJ~train_data$age + train_data$sex + train_data$race +  train_data$health + train_data$marital + train_data$degree + train_data$employ + train_data$family + train_data$kid + train_data$elderly + train_data$covid_mh + train_data$covid_fin + train_data$health_insur + train_data$income + train_data$assist + train_data$county + train_data$aia + train_data$pregnant + train_data$schfeel + train_data$parhw)[, -1]
+
+#trainx <- as.matrix(data.frame(trainfactors, train_data$bmi))
+```
+
+```{r}
+testfactors <- model.matrix(test_data$SUD_MJ~test_data$age + test_data$sex + test_data$race +  test_data$health + test_data$marital + test_data$degree + test_data$employ + test_data$family + test_data$kid + test_data$elderly + test_data$covid_mh + test_data$covid_fin + test_data$health_insur + test_data$income + test_data$assist + test_data$county + test_data$aia + test_data$pregnant + test_data$schfeel + test_data$parhw)[, -1]
+
+#testx <- as.matrix(data.frame(testfactors, test_data$bmi))
+```
+
+```{r}
+CVlasso <- cv.glmnet(trainfactors, 
+                     train_data$SUD_MJ, 
+                     type.measure = "class", 
+                     family = "binomial", 
+                     alpha = 1, 
+                     nfolds = 10)
+```
+
+
+```{r}
+p1 <- plot(CVlasso)
+p2 <- plot(CVlasso$glmnet.fit, 
+     "lambda", label=FALSE)
+```
+
+```{r}
+CVlasso$lambda.min
+coef(CVlasso, s = 0.01)
+```
+
+```{r}
+# Make prediction on train data 
+probabilities <- predict(CVlasso, s = 0.01, newx = trainfactors, type = "response")
+train.pred <- prediction(probabilities, train_data$SUD_MJ)
+train.perf <- performance(train.pred, "auc")
+auc_lasso1 <- train.perf@y.values[[1]]
+auc_lasso1
+```
+
+```{r}
+# Make prediction on test data
+probabilities <- predict(CVlasso, s = 0.01, newx = testfactors, type = "response")
+test.pred <- prediction(probabilities, test_data$SUD_MJ)
+test.perf <- performance(test.pred, "auc")
+auc_lasso2 <- test.perf@y.values[[1]]
+auc_lasso2
+```
+
+
+
+
+
