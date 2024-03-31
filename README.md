@@ -1,4 +1,4 @@
-# Machine-Learning Prediction of Marijuana Use Disorder
+# ML Prediction of Marijuana Use Disorder
 
 ## Introduction
 
